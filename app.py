@@ -64,9 +64,18 @@ header, footer, #MainMenu {visibility: hidden;}
 
 
 # -------------------------------------------------------
-# SIDEBAR SETTINGS
+# HARD RESET SUPPORT
+# -------------------------------------------------------
+if "reset_triggered" not in st.session_state:
+    st.session_state.reset_triggered = False
+
+
+
+# -------------------------------------------------------
+# SIDEBAR SETTINGS + BUTTONS
 # -------------------------------------------------------
 with st.sidebar:
+
     st.header("⚙️ Quiz Settings")
 
     mode = st.radio("Mode", ["Student Mode", "Teacher Mode"])
@@ -76,6 +85,17 @@ with st.sidebar:
     seconds = st.slider("Timer (seconds)", 30, 600, 120) if timer_enabled else 0
 
     st.markdown("---")
+
+    # NEW BUTTONS
+    show_history = st.button("📊 View Quiz History")
+    reset_app = st.button("🔄 Reset App")
+
+    if reset_app:
+        st.session_state.clear()
+        st.session_state.reset_triggered = True
+        st.rerun()
+
+
     st.caption("Customize your quiz settings here.")
 
 
@@ -105,7 +125,6 @@ if st.button("Generate Quiz"):
             st.session_state.seconds = seconds
             st.session_state.timer_running = timer_enabled
 
-            # Remove old remaining time
             if "remaining" in st.session_state:
                 del st.session_state["remaining"]
 
@@ -120,8 +139,26 @@ if st.button("Generate Quiz"):
 
 
 
-# Stop if quiz is not generated yet
-if "quiz" not in st.session_state:
+# Stop if quiz not ready yet
+if "quiz" not in st.session_state and not show_history:
+    st.stop()
+
+
+
+# ======================================================================
+# QUIZ HISTORY (Shown ONLY when button clicked)
+# ======================================================================
+if show_history:
+    st.header("📊 Quiz History")
+
+    history = get_history()
+
+    if not history:
+        st.info("No quiz history yet.")
+    else:
+        for topic, diff, score, total, ts in history:
+            st.write(f"📌 **{topic}** ({diff}) — {score}/{total} — *{ts}*")
+
     st.stop()
 
 
@@ -159,7 +196,7 @@ if st.session_state.mode == "Teacher Mode":
 
 st.header("📘 Student Quiz")
 
-# ⭐⭐ TIMER RENDERED FROM MAIN (Displays in Sidebar)
+# ⭐ TIMER RUNNING (renders in sidebar)
 if st.session_state.get("timer_enabled", False):
     start_timer(st.session_state.seconds)
 
@@ -199,77 +236,75 @@ for idx, q in enumerate(st.session_state.quiz):
 
 
 
-# ======================================================================
-# SUBMIT LOGIC (FINAL FIX)
-# ======================================================================
-
-# --- Initialize submit_pressed if missing ---
+# ------------------------------------------
+# FIXED SUBMIT BLOCK (NO FLICKER)
+# ------------------------------------------
+if "submitted" not in st.session_state:
+    st.session_state.submitted = False
 if "submit_pressed" not in st.session_state:
     st.session_state.submit_pressed = False
 
 
-# --- Safe Time-Up Condition (fixed) ---
-time_up = (
-    st.session_state.get("timer_enabled", False)
-    and not st.session_state.get("timer_running", True)
-    and not st.session_state.get("submitted", False)
-    and not st.session_state.get("submit_pressed", False)  # ⭐ CRITICAL FIX
-)
+# --- If already submitted: skip time-up logic ---
+if st.session_state.submitted:
+    time_up = False
+else:
+    time_up = (
+        st.session_state.get("timer_enabled", False)
+        and not st.session_state.get("timer_running", True)
+        and not st.session_state.get("submitted", False)
+        and not st.session_state.get("submit_pressed", False)
+    )
+
 
 if time_up:
     st.error("⏳ Time is up — You cannot submit answers.")
     st.button("Submit Quiz", disabled=True)
 
 else:
-
-    # --- SUBMIT BUTTON ---
     if st.button("Submit Quiz"):
 
-        # ⭐ MUST BE FIRST → prevents Time's Up firing
-        st.session_state.submit_pressed = True
+        # --- APPLY SUBMIT FLAGS BEFORE ANY RERUN ---
         st.session_state.submitted = True
+        st.session_state.submit_pressed = True
 
-        # Stop timer
+        # Stop the timer
         st.session_state.timer_running = False
         st.session_state.remaining = 0
-        st.query_params = {}
 
-        # ---- SCORE QUIZ ----
-        correct = 0
-
-        for i, q in enumerate(st.session_state.quiz):
-            selected = st.session_state.user_answers.get(i, "")
-            options = q["options"]
-
-            # Convert option → A/B/C/D
-            if selected in options:
-                index = options.index(selected)
-                selected_letter = ["A", "B", "C", "D"][index]
-            else:
-                selected_letter = ""
-
-            if selected_letter.upper() == q["answer"].upper():
-                correct += 1
-
-        save_history(
-            st.session_state.topic,
-            st.session_state.difficulty,
-            correct,
-            len(st.session_state.quiz)
-        )
-
-        st.success(f"🎉 Your Score: {correct}/{len(st.session_state.quiz)}")
-
-        st.write("### Correct Answers")
-        for i, q in enumerate(st.session_state.quiz):
-            st.write(f"**{i+1}. {q['answer']}** — {q['explanation']}")
+        # Force clean rerun (prevents flicker)
+        st.rerun()
 
 
-# ======================================================================
-# HISTORY
-# ======================================================================
-st.write("---")
-st.subheader("📊 Quiz History")
+# ------------------------------------------------------
+# SHOW SCORE ONLY AFTER SUBMIT (persistent)
+# ------------------------------------------------------
+if st.session_state.submitted:
 
-for topic, diff, score, total, ts in get_history():
-    st.write(f"📌 **{topic}** ({diff}) — {score}/{total} — *{ts}*")
+    correct = 0
+
+    for i, q in enumerate(st.session_state.quiz):
+        selected = st.session_state.user_answers.get(i, "")
+        opts = q["options"]
+
+        if selected in opts:
+            index = opts.index(selected)
+            letter = ["A", "B", "C", "D"][index]
+        else:
+            letter = ""
+
+        if letter.upper() == q["answer"].upper():
+            correct += 1
+
+    save_history(
+        st.session_state.topic,
+        st.session_state.difficulty,
+        correct,
+        len(st.session_state.quiz)
+    )
+
+    st.success(f"🎉 Your Score: {correct}/{len(st.session_state.quiz)}")
+
+    st.write("### Correct Answers")
+    for i, q in enumerate(st.session_state.quiz):
+        st.write(f"**{i+1}. {q['answer']}** — {q['explanation']}")
